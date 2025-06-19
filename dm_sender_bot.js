@@ -27,13 +27,44 @@ async function runDMSender(browser, page) {
     // Função para salvar CSV
     const saveLeads = (leads) => {
         try {
-            const json2csv = new Parser({ fields: Object.keys(leads[0]) });
+            // Coletar TODAS as colunas possíveis de todos os registros
+            const allFields = new Set();
+            
+            leads.forEach(lead => {
+                Object.keys(lead).forEach(key => allFields.add(key));
+            });
+            
+            // Converter Set para Array e garantir ordem lógica
+            const fieldsArray = Array.from(allFields);
+            
+            // Colocar colunas importantes no início (se existirem)
+            const priorityFields = ['username', 'qualified', 'message_sent', 'followed', 'generated_message'];
+            const orderedFields = [];
+            
+            // Adicionar campos prioritários primeiro
+            priorityFields.forEach(field => {
+                if (fieldsArray.includes(field)) {
+                    orderedFields.push(field);
+                }
+            });
+            
+            // Adicionar campos restantes
+            fieldsArray.forEach(field => {
+                if (!orderedFields.includes(field)) {
+                    orderedFields.push(field);
+                }
+            });
+            
+            console.log(`📋 Salvando CSV com ${orderedFields.length} colunas: ${orderedFields.join(', ')}`);
+            
+            const json2csv = new Parser({ fields: orderedFields });
             const csv = json2csv.parse(leads);
             fs.writeFileSync(filePath, csv, 'utf8');
-            console.log('💾 CSV atualizado!');
+            console.log('💾 CSV atualizado com todas as colunas!');
             return true;
         } catch (error) {
             console.error('❌ Erro ao salvar CSV:', error.message);
+            console.error('Debug - Estrutura do primeiro lead:', Object.keys(leads[0] || {}));
             return false;
         }
     };
@@ -90,6 +121,14 @@ async function runDMSender(browser, page) {
                     continue;
                 }
 
+                // Garantir que as colunas existam
+                if (!leads[leadIndex].hasOwnProperty('followed')) {
+                    leads[leadIndex].followed = '';
+                }
+                if (!leads[leadIndex].hasOwnProperty('message_sent')) {
+                    leads[leadIndex].message_sent = '';
+                }
+
                 if (followSuccess) {
                     console.log('✅ Usuário seguido com sucesso!');
                     leads[leadIndex].followed = new Date().toISOString();
@@ -107,6 +146,10 @@ async function runDMSender(browser, page) {
                 
                 if (!messageButton) {
                     console.log('❌ Botão "mensagem" não encontrado.');
+                    // Garantir que a coluna existe antes de atualizar
+                    if (!leads[leadIndex].hasOwnProperty('message_sent')) {
+                        leads[leadIndex].message_sent = '';
+                    }
                     leads[leadIndex].message_sent = 'button_not_found';
                     saveLeads(leads);
                     continue;
@@ -127,6 +170,10 @@ async function runDMSender(browser, page) {
                 
                 if (messageAlreadySent) {
                     console.log('🔁 Já existe uma mensagem enviada. Pulando.');
+                    // Garantir que a coluna existe antes de atualizar
+                    if (!leads[leadIndex].hasOwnProperty('message_sent')) {
+                        leads[leadIndex].message_sent = '';
+                    }
                     leads[leadIndex].message_sent = 'already_sent';
                     saveLeads(leads);
                     continue;
@@ -138,6 +185,16 @@ async function runDMSender(browser, page) {
                 // Recarregar leads novamente antes de salvar
                 leads = await loadLeads();
                 const updatedLeadIndex = leads.findIndex(l => l.username === lead.username);
+                
+                if (updatedLeadIndex === -1) {
+                    console.log('❌ Lead não encontrado para atualização final.');
+                    continue;
+                }
+
+                // Garantir que as colunas existam
+                if (!leads[updatedLeadIndex].hasOwnProperty('message_sent')) {
+                    leads[updatedLeadIndex].message_sent = '';
+                }
                 
                 if (success) {
                     console.log('✅ Mensagem enviada com sucesso.');
@@ -163,6 +220,17 @@ async function runDMSender(browser, page) {
                 const errorLeadIndex = leads.findIndex(l => l.username === lead.username);
                 
                 if (errorLeadIndex !== -1) {
+                    // Garantir que as colunas existam
+                    if (!leads[errorLeadIndex].hasOwnProperty('message_sent')) {
+                        leads[errorLeadIndex].message_sent = '';
+                    }
+                    if (!leads[errorLeadIndex].hasOwnProperty('followed')) {
+                        leads[errorLeadIndex].followed = '';
+                    }
+                    if (!leads[errorLeadIndex].hasOwnProperty('error_details')) {
+                        leads[errorLeadIndex].error_details = '';
+                    }
+                    
                     leads[errorLeadIndex].message_sent = 'error';
                     leads[errorLeadIndex].followed = 'error';
                     leads[errorLeadIndex].error_details = err.message;
