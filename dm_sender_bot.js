@@ -12,15 +12,34 @@ async function runDMSender(browser, page) {
         return;
     }
 
-    // Ler CSV
-    const leads = [];
-    await new Promise((resolve, reject) => {
-        fs.createReadStream(filePath)
-            .pipe(csvParser())
-            .on('data', (row) => leads.push(row))
-            .on('end', resolve)
-            .on('error', reject);
-    });
+    // Função para carregar CSV
+    const loadLeads = () => {
+        return new Promise((resolve, reject) => {
+            const leads = [];
+            fs.createReadStream(filePath)
+                .pipe(csvParser())
+                .on('data', (row) => leads.push(row))
+                .on('end', () => resolve(leads))
+                .on('error', reject);
+        });
+    };
+
+    // Função para salvar CSV
+    const saveLeads = (leads) => {
+        try {
+            const json2csv = new Parser({ fields: Object.keys(leads[0]) });
+            const csv = json2csv.parse(leads);
+            fs.writeFileSync(filePath, csv, 'utf8');
+            console.log('💾 CSV atualizado!');
+            return true;
+        } catch (error) {
+            console.error('❌ Erro ao salvar CSV:', error.message);
+            return false;
+        }
+    };
+
+    // Carregar leads inicial
+    let leads = await loadLeads();
 
     // Filtrar leads qualificados e não enviados
     const leadsToSend = leads.filter(row => row.qualified === 'yes' && !row.message_sent);
@@ -53,25 +72,34 @@ async function runDMSender(browser, page) {
             console.log(`📩 Processando [${i + 1}/${numToSend}]: @${lead.username}`);
 
             const profileUrl = `https://www.instagram.com/${lead.username}/`;
-            await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-
-            await randomDelay(30000, 60000);
-
+            
             try {
+                await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+                await randomDelay(30000, 60000);
+
                 // PRIMEIRO: Tentar seguir a pessoa
                 console.log(`👤 Tentando seguir @${lead.username}...`);
                 const followSuccess = await followUser(page);
                 
-                if (followSuccess) {
-                    console.log('✅ Usuário seguido com sucesso!');
-                    // Salvar informação de que seguiu
-                    lead.followed = new Date().toISOString();
-                } else {
-                    console.log('⚠️ Não foi possível seguir o usuário (pode já estar seguindo ou perfil privado)');
-                    lead.followed = 'no';
+                // Recarregar leads do arquivo para ter dados atualizados
+                leads = await loadLeads();
+                const leadIndex = leads.findIndex(l => l.username === lead.username);
+                
+                if (leadIndex === -1) {
+                    console.log('❌ Lead não encontrado no CSV. Pulando...');
+                    continue;
                 }
 
-                // Aguardar um pouco antes de enviar mensagem
+                if (followSuccess) {
+                    console.log('✅ Usuário seguido com sucesso!');
+                    leads[leadIndex].followed = new Date().toISOString();
+                } else {
+                    console.log('⚠️ Não foi possível seguir o usuário');
+                    leads[leadIndex].followed = 'no';
+                }
+
+                // **SALVAR APÓS SEGUIR**
+                saveLeads(leads);
                 await randomDelay(5000, 8000);
 
                 // SEGUNDO: Clicar em "Enviar mensagem"
@@ -79,6 +107,8 @@ async function runDMSender(browser, page) {
                 
                 if (!messageButton) {
                     console.log('❌ Botão "mensagem" não encontrado.');
+                    leads[leadIndex].message_sent = 'button_not_found';
+                    saveLeads(leads);
                     continue;
                 }
 
@@ -97,44 +127,57 @@ async function runDMSender(browser, page) {
                 
                 if (messageAlreadySent) {
                     console.log('🔁 Já existe uma mensagem enviada. Pulando.');
-                    
-                    // Marcar como não enviado (pois já foi enviado anteriormente)
-                    lead.message_sent = 'no';
+                    leads[leadIndex].message_sent = 'already_sent';
+                    saveLeads(leads);
                     continue;
                 }
 
                 // Enviar mensagem
                 const success = await sendMessage(page, lead.generated_message);
                 
+                // Recarregar leads novamente antes de salvar
+                leads = await loadLeads();
+                const updatedLeadIndex = leads.findIndex(l => l.username === lead.username);
+                
                 if (success) {
                     console.log('✅ Mensagem enviada com sucesso.');
-                    // Salvar data de envio
-                    lead.message_sent = new Date().toISOString();
+                    leads[updatedLeadIndex].message_sent = new Date().toISOString();
+                    
+                    // **SALVAR APÓS ENVIO BEM-SUCEDIDO**
+                    saveLeads(leads);
                     await randomDelay(360000, 420000);
                 } else {
                     console.log('❌ Falha ao enviar mensagem.');
-                    // Marcar como não enviado
+                    leads[updatedLeadIndex].message_sent = 'failed';
+                    
+                    // **SALVAR APÓS FALHA**
+                    saveLeads(leads);
                     await randomDelay(1700, 8000);
                 }
 
             } catch (err) {
                 console.error(`❌ Erro ao processar @${lead.username}:`, err.message);
                 
-                // Marcar como não enviado em caso de erro
-                lead.message_sent = 'no';
-                lead.followed = 'error';
+                // Recarregar leads e marcar erro
+                leads = await loadLeads();
+                const errorLeadIndex = leads.findIndex(l => l.username === lead.username);
+                
+                if (errorLeadIndex !== -1) {
+                    leads[errorLeadIndex].message_sent = 'error';
+                    leads[errorLeadIndex].followed = 'error';
+                    leads[errorLeadIndex].error_details = err.message;
+                    
+                    // **SALVAR APÓS ERRO**
+                    saveLeads(leads);
+                }
+                
                 await randomDelay(1700, 8000);
                 continue;
             }
         }
 
-        // Salvar CSV atualizado
-        const json2csv = new Parser({ fields: Object.keys(leads[0]) });
-        const csv = json2csv.parse(leads);
-        fs.writeFileSync(filePath, csv, 'utf8');
-
-        console.log('💾 CSV atualizado com timestamps de envio e seguidas.');
         console.log('🏁 Envio de mensagens finalizado.');
+        console.log('💾 Todos os dados foram salvos incrementalmente durante o processo.');
     });
 }
 
@@ -219,22 +262,6 @@ async function followUser(page) {
             return true; // Consideramos como sucesso
         }
 
-        // Debug: listar botões encontrados
-        console.log('🔍 Debug: Listando botões encontrados...');
-        await page.evaluate(() => {
-            const buttons = document.querySelectorAll('button, div[role="button"]');
-            console.log(`Total de botões encontrados: ${buttons.length}`);
-            
-            buttons.forEach((button, index) => {
-                const text = (button.innerText || button.textContent || '').trim();
-                const classes = button.className || '';
-                
-                if (text && text.length < 50) { // Filtrar textos muito longos
-                    console.log(`Botão ${index + 1}: "${text}" | Classes: "${classes}"`);
-                }
-            });
-        });
-
         console.log('⚠️ Botão de seguir não encontrado.');
         return false;
 
@@ -300,30 +327,15 @@ async function handleNotificationOverlay(page) {
         // Aguardar que possíveis overlays apareçam
         await randomDelay(3000, 5000);
 
-        // MÉTODO 1: Buscar pelo texto exato "Agora não" (MAIS CONFIÁVEL)
-        console.log('🎯 Método 1: Buscando pelo texto exato...');
-        
+        // MÉTODO 1: Buscar pelo texto exato "Agora não"
         const agoraNaoClicked = await page.evaluate(() => {
-            // Procurar por todos os botões na página
             const allButtons = document.querySelectorAll('button');
             
             for (const button of allButtons) {
                 const buttonText = (button.textContent || button.innerText || '').trim();
                 
-                // Verificar se o texto é exatamente "Agora não"
-                if (buttonText === 'Agora não') {
-                    console.log(`✅ Botão "Agora não" encontrado: "${buttonText}"`);
-                    button.click();
-                    return true;
-                }
-            }
-            
-            // Também tentar variações em inglês
-            for (const button of allButtons) {
-                const buttonText = (button.textContent || button.innerText || '').trim();
-                
-                if (buttonText === 'Not Now' || buttonText === 'not now') {
-                    console.log(`✅ Botão "Not Now" encontrado: "${buttonText}"`);
+                if (buttonText === 'Agora não' || buttonText === 'Not Now' || buttonText === 'not now') {
+                    console.log(`✅ Botão encontrado: "${buttonText}"`);
                     button.click();
                     return true;
                 }
@@ -333,14 +345,12 @@ async function handleNotificationOverlay(page) {
         });
 
         if (agoraNaoClicked) {
-            console.log('✅ Overlay fechado com sucesso pelo texto exato!');
+            console.log('✅ Overlay fechado com sucesso!');
             await randomDelay(3000, 4000);
             return true;
         }
 
         // MÉTODO 2: Buscar dentro de dialogs específicos
-        console.log('🎯 Método 2: Buscando dentro de dialogs...');
-        
         const dialogClosed = await page.evaluate(() => {
             const dialogs = document.querySelectorAll('div[role="dialog"]');
             
@@ -351,7 +361,6 @@ async function handleNotificationOverlay(page) {
                     const buttonText = (button.textContent || button.innerText || '').trim();
                     
                     if (buttonText === 'Agora não' || buttonText === 'Not Now' || buttonText === 'not now') {
-                        console.log(`✅ Botão encontrado dentro do dialog: "${buttonText}"`);
                         button.click();
                         return true;
                     }
@@ -367,95 +376,8 @@ async function handleNotificationOverlay(page) {
             return true;
         }
 
-        // MÉTODO 3: Buscar por aria-label ou atributos relacionados
-        console.log('🎯 Método 3: Buscando por aria-label...');
-        
-        const ariaClicked = await page.evaluate(() => {
-            const buttons = document.querySelectorAll('button[aria-label], div[role="button"][aria-label]');
-            
-            for (const button of buttons) {
-                const ariaLabel = button.getAttribute('aria-label') || '';
-                const buttonText = (button.textContent || button.innerText || '').trim();
-                
-                // Verificar tanto o aria-label quanto o texto
-                if (ariaLabel.includes('Agora não') || ariaLabel.includes('Not Now') || 
-                    buttonText === 'Agora não' || buttonText === 'Not Now') {
-                    console.log(`✅ Botão encontrado por aria-label: "${ariaLabel}" / texto: "${buttonText}"`);
-                    button.click();
-                    return true;
-                }
-            }
-            
-            return false;
-        });
-
-        if (ariaClicked) {
-            console.log('✅ Overlay fechado via aria-label!');
-            await randomDelay(3000, 4000);
-            return true;
-        }
-
-        // MÉTODO 4: Buscar por posição relativa (se aparecer junto com "Ativar")
-        console.log('🎯 Método 4: Buscando por contexto com "Ativar"...');
-        
-        const contextClicked = await page.evaluate(() => {
-            const allButtons = document.querySelectorAll('button');
-            let ativarButton = null;
-            let agoraNaoButton = null;
-            
-            // Primeiro, encontrar o botão "Ativar"
-            for (const button of allButtons) {
-                const buttonText = (button.textContent || button.innerText || '').trim();
-                if (buttonText === 'Ativar' || buttonText === 'Turn On' || buttonText === 'Allow') {
-                    ativarButton = button;
-                    break;
-                }
-            }
-            
-            // Se encontrou "Ativar", procurar "Agora não" próximo
-            if (ativarButton) {
-                const parent = ativarButton.closest('div[role="dialog"], div, section');
-                if (parent) {
-                    const nearbyButtons = parent.querySelectorAll('button');
-                    for (const button of nearbyButtons) {
-                        const buttonText = (button.textContent || button.innerText || '').trim();
-                        if (buttonText === 'Agora não' || buttonText === 'Not Now') {
-                            console.log(`✅ Botão "Agora não" encontrado próximo ao "Ativar"`);
-                            button.click();
-                            return true;
-                        }
-                    }
-                }
-            }
-            
-            return false;
-        });
-
-        if (contextClicked) {
-            console.log('✅ Overlay fechado via contexto!');
-            await randomDelay(3000, 4000);
-            return true;
-        }
-
-        // MÉTODO 5: Debug - listar todos os botões visíveis
-        console.log('🔍 Debug: Listando todos os botões visíveis...');
-        await page.evaluate(() => {
-            const allButtons = document.querySelectorAll('button');
-            console.log(`Total de botões encontrados: ${allButtons.length}`);
-            
-            allButtons.forEach((button, index) => {
-                const text = (button.textContent || button.innerText || '').trim();
-                const ariaLabel = button.getAttribute('aria-label') || '';
-                const classes = button.className || '';
-                
-                if (text || ariaLabel) {
-                    console.log(`Botão ${index + 1}: Texto="${text}" | Aria-label="${ariaLabel}" | Classes="${classes}"`);
-                }
-            });
-        });
-
-        // ÚLTIMO RECURSO: tentar ESC
-        console.log('⌨️ Último recurso: tentando ESC...');
+        // Último recurso: ESC
+        console.log('⌨️ Tentando ESC...');
         try {
             await page.keyboard.press('Escape');
             await randomDelay(2000, 3000);
@@ -463,7 +385,6 @@ async function handleNotificationOverlay(page) {
             console.log('⚠️ ESC não funcionou');
         }
 
-        console.log('⚠️ Nenhum método conseguiu fechar o overlay.');
         return false;
 
     } catch (error) {
@@ -482,7 +403,6 @@ async function checkExistingMessage(page) {
 
         // Verificar se existe o texto "Você enviou" ou similar
         const hasMessage = await page.evaluate(() => {
-            // Procurar por diferentes variações do texto
             const textVariations = [
                 'você enviou',
                 'you sent', 
@@ -499,7 +419,6 @@ async function checkExistingMessage(page) {
                 
                 for (const variation of textVariations) {
                     if (text.includes(variation)) {
-                        console.log(`📩 Encontrado texto: "${variation}" - mensagem já enviada`);
                         return true;
                     }
                 }
@@ -513,7 +432,7 @@ async function checkExistingMessage(page) {
 
     } catch (error) {
         console.log(`❌ Erro ao verificar histórico de mensagens: ${error.message}`);
-        return false; // Em caso de erro, assumir que não foi enviada
+        return false;
     }
 }
 
@@ -522,7 +441,7 @@ async function sendMessage(page, message) {
     try {
         console.log('📝 Enviando mensagem...');
         
-        // Procurar pelo campo de texto (textarea ou input)
+        // Procurar pelo campo de texto
         let textField = null;
         
         const selectors = [
