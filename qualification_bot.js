@@ -91,6 +91,7 @@ async function runQualification(browser, page) {
     console.log('\n🏁 Finished processing 300 leads.');
 }
 
+
 async function processSingleProfile(page, lead) {
     const handle = lead.username;
     const profileUrl = `https://www.instagram.com/${handle}/`;
@@ -114,20 +115,28 @@ async function processSingleProfile(page, lead) {
     const positiveKeywords = ['ads', 'agency', 'coach', 'authority', 'brand', 'build', 'building', 'built', 'business', 'businesses', 'clients', 'coaching', 'company', 'figure', 'founder', 'grow', 'growth', 'help', 'helped', 'helping', 'marketing', 'million', 'niche', 'owner', 'profit', 'profitable', 'revenue', 'sales', 'training', 'funnel', 'traffic', 'money', 'ceo', 'b2b', 'trained', 'train', 'generated', 'lead', 'scale', 'scalable', 'exited', 'saas', 'mentor', 'consultant', 'high ticket', 'speaker', 'investor', 'tedx', 'forbes', 'entrepreneur', 'millionaire', 'millions', 'invest', 'exits'];
     const negativeKeywords = ['teen', 'music', 'rapper', 'rap', 'artist', 'influencer', 'crypto', 'bet', 'trader', 'adult', 'hot', 'escort', 'ecom', 'amazon', 'affiliate', 'ecommerce'];
     const minFollowers = 500;
+    const maxFollowers = 5000000;
     const minPosts = 20;
 
 // 1️⃣ Combine os textos primeiro
 const combinedText = `${handle} ${fullBio} ${pageText}`.toLowerCase();
 
 // 2️⃣ Faça os matches
-const positiveMatches = positiveKeywords.filter(kw => combinedText.includes(kw));
-const negativeMatches = negativeKeywords.filter(kw => combinedText.includes(kw));
+const positiveMatches = positiveKeywords.filter(kw => {
+    const regex = new RegExp(`\\b${kw}\\b`, 'i');
+    return regex.test(combinedText);
+});
+const negativeMatches = negativeKeywords.filter(kw => {
+    const regex = new RegExp(`\\b${kw}\\b`, 'i');
+    return regex.test(combinedText);
+});
 
 // 3️⃣ Agora PODE calcular se vai enviar pro GPT
 const canSendToGPT = (
     negativeMatches.length === 0 &&
     messageButtonExists &&
     followersCount >= minFollowers &&
+    followersCount <= maxFollowers &&
     postsCount >= minPosts
 );
 
@@ -189,17 +198,6 @@ if (canSendToGPT) {
         last_updated_at: new Date().toISOString() // 🕒
     });
 
-
-
-
-    // 🔥 Aqui no futuro → salvar no CSV as colunas:
-    // lead.followers_count = followersCount;
-    // lead.posts_count = postsCount;
-    // lead.bio = fullBio;
-    // lead.positive_keywords_count = positiveMatches.length;
-    // lead.negative_keywords_found = negativeMatches.join(', ');
-    // lead.opportunity_processed = 'yes';
-    // E fazer update do CSV → te ensino na próxima etapa!
 }
 
 module.exports = runQualification;
