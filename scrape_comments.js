@@ -6,7 +6,7 @@ async function scrapeComments(page, postUrl) {
     console.log('🚀 Abrindo post:', postUrl);
 
     await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await randomDelay(3000, 5000);
+    await randomDelay(3000, 10000);
 
     console.log('🔍 Detectando tipo de post (modal ou página full)...');
 
@@ -57,14 +57,14 @@ async function scrapeComments(page, postUrl) {
 
     let scrollAttempts = 0;
 
-    const maxScrollAttempts = 75;
+    const maxScrollAttempts = 750;
 
     let consecutiveNoChanges = 0;
 
     while (
-      retries < 6 &&
+      retries < 4 &&
       scrollAttempts < maxScrollAttempts &&
-      consecutiveNoChanges < 3
+      consecutiveNoChanges < 4
     ) {
       try {
         scrollAttempts++;
@@ -81,7 +81,7 @@ async function scrapeComments(page, postUrl) {
 
         const currentHeight = await page.$eval(
           commentsContainerSelector,
-          el => el.scrollHeights
+          el => el.scrollHeight
         );
 
         // Fazer scroll suave dentro do container
@@ -96,7 +96,7 @@ async function scrapeComments(page, postUrl) {
 
         // Aguardar carregamento com delay variável
 
-        await randomDelay(3000, 5000);
+        await randomDelay(3000, 10000);
 
         // Procurar e clicar em botão "Ver mais comentários" com múltiplos seletores
 
@@ -143,7 +143,7 @@ async function scrapeComments(page, postUrl) {
                     `Botão "Ver mais comentários" clicado (${selector})`
                   );
 
-                  await randomDelay(4000, 6000);
+                  await randomDelay(4000, 8000);
 
                   buttonClicked = true;
 
@@ -184,7 +184,7 @@ async function scrapeComments(page, postUrl) {
               el.scrollBy(0, 1000);
             });
 
-            await randomDelay(2000, 3000);
+            await randomDelay(2000, 10000);
           }
         } else {
           retries = 0;
@@ -204,7 +204,7 @@ async function scrapeComments(page, postUrl) {
 
         consecutiveNoChanges++;
 
-        await randomDelay(3000, 5000);
+        await randomDelay(3000, 10000);
       }
     }
 
@@ -388,7 +388,6 @@ if (username && username.length > 0) {
 
     return uniqueComments;
 }
-// Remove unmatched closing brace here to fix 'try' expected error
 
 async function saveCommentsToCSV(comments) {
   const filePath = path.join(__dirname, '..', 'data', 'leads_list.csv');
