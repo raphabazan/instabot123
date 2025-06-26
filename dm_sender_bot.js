@@ -322,7 +322,7 @@ async function runDMSender(browser, page) {
 
 async function sendVideo(page) {
     try {
-        console.log('🎬 Iniciando envio de vídeo com Drag & Drop...');
+        console.log('🎬 Iniciando envio de vídeo...');
         
         // Procurar por arquivos de vídeo na pasta taiz
         const videoDir = path.join(__dirname, '..', 'taiz');
@@ -349,16 +349,48 @@ async function sendVideo(page) {
         
         console.log(`📁 Usando vídeo: ${videoFile}`);
 
-        // Aguardar um pouco antes de começar
+        // PRIMEIRA TENTATIVA: Drag & Drop
+        console.log('🎯 Tentativa 1: Drag & Drop');
+        const dragDropSuccess = await tryDragAndDrop(page, videoPath, videoFile);
+        
+        if (dragDropSuccess) {
+            console.log('✅ Vídeo enviado com sucesso via Drag & Drop!');
+            return true;
+        }
+
+        // SEGUNDA TENTATIVA: Upload tradicional
+        console.log('🔄 Tentativa 2: Upload tradicional');
+        const uploadSuccess = await tryTraditionalUpload(page, videoPath, videoFile);
+        
+        if (uploadSuccess) {
+            console.log('✅ Vídeo enviado com sucesso via Upload tradicional!');
+            return true;
+        }
+
+        console.log('❌ Todas as tentativas de envio falharam.');
+        return false;
+        
+    } catch (error) {
+        console.log(`❌ Erro geral ao enviar vídeo: ${error.message}`);
+        return false;
+    }
+}
+
+// MÉTODO 1: Drag & Drop (original melhorado)
+async function tryDragAndDrop(page, videoPath, videoFile) {
+    try {
+        console.log('🎬 Tentando Drag & Drop...');
+        
         await randomDelay(2000, 4000);
 
-        // Encontrar a área de drop (geralmente o campo de texto ou área de composição)
+        // Encontrar a área de drop
         const dropZone = await page.evaluate(() => {
-            // Seletores específicos para área de drop
             const selectors = [
                 'textarea[placeholder*="mensagem"]',
                 'textarea[placeholder*="message"]', 
                 'div[contenteditable="true"]',
+                '[data-testid*="compose"]',
+                '.compose-box',
                 'textarea',
                 'input[type="text"]'
             ];
@@ -398,9 +430,7 @@ async function sendVideo(page) {
         const fileName = path.basename(videoPath);
         const fileType = `video/${path.extname(videoPath).slice(1)}`;
 
-        console.log('📤 Iniciando simulação de Drag & Drop...');
-
-        // Simular movimento do mouse para a área de drop (comportamento humano)
+        // Simular movimento do mouse
         await page.mouse.move(dropZone.x - 100, dropZone.y - 100);
         await randomDelay(500, 1000);
         await page.mouse.move(dropZone.x, dropZone.y);
@@ -410,45 +440,33 @@ async function sendVideo(page) {
         const dropResult = await page.evaluate((fileData, fileName, fileType, dropZone) => {
             return new Promise((resolve) => {
                 try {
-                    // Converter buffer para Uint8Array
                     const uint8Array = new Uint8Array(fileData.data);
-                    
-                    // Criar o arquivo
                     const file = new File([uint8Array], fileName, { 
                         type: fileType,
-                        lastModified: Date.now() - Math.floor(Math.random() * 86400000) // Random dentro de 24h
+                        lastModified: Date.now() - Math.floor(Math.random() * 86400000)
                     });
 
-                    // Criar DataTransfer com o arquivo
                     const dataTransfer = new DataTransfer();
                     dataTransfer.items.add(file);
 
-                    // Encontrar o elemento de drop
                     const dropElement = document.querySelector(dropZone.selector);
                     if (!dropElement) {
                         resolve({ success: false, error: 'Drop element not found' });
                         return;
                     }
 
-                    console.log('🎯 Elemento de drop encontrado:', dropElement.tagName);
-
-                    // Simular sequência completa de eventos de drag & drop
+                    // Simular eventos de drag & drop
                     const events = [
-                        // Eventos de drag enter
                         new DragEvent('dragenter', {
                             dataTransfer: dataTransfer,
                             bubbles: true,
                             cancelable: true
                         }),
-                        
-                        // Eventos de drag over (múltiplos para simular movimento)
                         new DragEvent('dragover', {
                             dataTransfer: dataTransfer,
                             bubbles: true,
                             cancelable: true
                         }),
-                        
-                        // Evento de drop final
                         new DragEvent('drop', {
                             dataTransfer: dataTransfer,
                             bubbles: true,
@@ -456,44 +474,34 @@ async function sendVideo(page) {
                         })
                     ];
 
-                    // Disparar eventos com delay entre eles
                     let eventIndex = 0;
                     
                     function dispatchNextEvent() {
                         if (eventIndex < events.length) {
                             const event = events[eventIndex];
-                            console.log(`🎬 Disparando evento: ${event.type}`);
                             
-                            // Prevenir comportamento padrão para dragover
                             if (event.type === 'dragover') {
                                 event.preventDefault();
                             }
                             
-                            const result = dropElement.dispatchEvent(event);
-                            console.log(`✅ Evento ${event.type} disparado, resultado:`, result);
-                            
+                            dropElement.dispatchEvent(event);
                             eventIndex++;
-                            
-                            // Delay entre eventos para parecer mais natural
                             setTimeout(dispatchNextEvent, 100 + Math.random() * 200);
                         } else {
-                            // Tentar também no body e document como fallback
+                            // Fallback adicional
                             document.body.dispatchEvent(new DragEvent('drop', {
                                 dataTransfer: dataTransfer,
                                 bubbles: true,
                                 cancelable: true
                             }));
                             
-                            console.log('✅ Sequência de drag & drop concluída');
                             resolve({ success: true, fileName: fileName });
                         }
                     }
                     
-                    // Iniciar a sequência
                     dispatchNextEvent();
                     
                 } catch (error) {
-                    console.error('❌ Erro na simulação de drag & drop:', error);
                     resolve({ success: false, error: error.message });
                 }
             });
@@ -504,26 +512,84 @@ async function sendVideo(page) {
             return false;
         }
 
-        console.log(`✅ Drag & drop executado com sucesso para: ${dropResult.fileName}`);
+        // Aguardar processamento
+        await randomDelay(8000, 12000);
 
-        // Aguardar processamento do arquivo - TEMPO AUMENTADO
-        console.log('⏳ Aguardando processamento do arquivo...');
-        await randomDelay(8000, 12000); // Aumentado de 3-6s para 8-12s
+        // Verificar se foi processado e tentar enviar
+        return await tryToSendProcessedVideo(page);
+        
+    } catch (error) {
+        console.log(`❌ Erro no drag & drop: ${error.message}`);
+        return false;
+    }
+}
 
-        // Aguardar mais processamento e verificar se o vídeo apareceu na interface
-        console.log('⏳ Verificando se vídeo foi processado...');
+// MÉTODO 2: Upload tradicional
+async function tryTraditionalUpload(page, videoPath, videoFile) {
+    try {
+        console.log('📤 Tentando upload tradicional...');
+        
+        await randomDelay(3000, 5000);
+
+        // Verificar se o input de arquivo está presente
+        const fileInputReady = await page.evaluate(() => {
+            const inputs = document.querySelectorAll('input[type="file"]');
+            for (const input of inputs) {
+                const accept = input.getAttribute('accept') || '';
+                if (accept.includes('video') || accept.includes('*') || accept === '') {
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        if (!fileInputReady) {
+            console.log('❌ Interface de upload não está pronta.');
+            return false;
+        }
+
+        console.log('⏳ Simulando tempo de escolha do arquivo...');
+        await randomDelay(4000, 7000);
+
+        // Encontrar o input de arquivo
+        const fileInput = await page.$('input[type="file"]');
+        if (!fileInput) {
+            console.log('❌ Input de arquivo não encontrado.');
+            return false;
+        }
+
+        // Fazer upload do arquivo
+        await fileInput.uploadFile(videoPath);
+        console.log('📤 Arquivo enviado para upload.');
+
+        // Aguardar processamento
+        await randomDelay(8000, 15000);
+
+        // Tentar enviar
+        return await tryToSendProcessedVideo(page);
+        
+    } catch (error) {
+        console.log(`❌ Erro no upload tradicional: ${error.message}`);
+        return false;
+    }
+}
+
+// Função auxiliar para tentar enviar vídeo processado
+async function tryToSendProcessedVideo(page) {
+    try {
+        // Verificar se o vídeo foi processado
         let videoProcessed = false;
         
         for (let i = 0; i < 5; i++) {
             videoProcessed = await page.evaluate(() => {
-                // Procurar por elementos que indicam que um vídeo foi anexado
                 const videoIndicators = [
                     'video',
                     'img[src*="blob"]',
                     '[data-testid*="video"]',
                     '.video-preview',
                     '[aria-label*="video"]',
-                    '[aria-label*="vídeo"]'
+                    '[aria-label*="vídeo"]',
+                    '.media-preview'
                 ];
                 
                 for (const selector of videoIndicators) {
@@ -531,7 +597,6 @@ async function sendVideo(page) {
                         return true;
                     }
                 }
-                
                 return false;
             });
             
@@ -544,12 +609,99 @@ async function sendVideo(page) {
             await randomDelay(3000, 5000);
         }
 
-        // MUDANÇA: Primeiro tentar enviar com Enter, depois buscar botão
-        console.log('🔄 Tentando enviar com Enter primeiro...');
+        // TENTATIVA 1: Enviar com Enter
+        console.log('🔄 Tentando enviar com Enter...');
         
-        try {
-    let textField = null;
+        const textField = await findTextField(page);
+        if (textField) {
+            await textField.click();
+            await randomDelay(1000, 2000);
+            
+            // Limpar campo
+            await page.keyboard.down('Control');
+            await page.keyboard.press('KeyA');
+            await page.keyboard.up('Control');
+            await page.keyboard.press('Delete');
+            await randomDelay(500, 1000);
+            
+            // Pressionar Enter
+            await page.keyboard.press('Enter');
+            await randomDelay(3000, 5000);
+            
+            // Verificar se foi enviado
+            const sentCheck1 = await checkIfMessageSent(page);
+            if (sentCheck1) {
+                return true;
+            }
+        }
 
+        // TENTATIVA 2: Procurar botão de enviar
+        console.log('🔄 Tentando encontrar botão de enviar...');
+        
+        const sendButton = await page.evaluate(() => {
+            const selectors = [
+                'button[aria-label*="send"]',
+                'button[aria-label*="enviar"]',
+                'button[data-testid*="send"]',
+                'button[title*="send"]',
+                'button[title*="enviar"]',
+                '.send-button',
+                'button:has([data-icon="send"])',
+                'button:has(svg[data-testid="send"])'
+            ];
+
+            for (const selector of selectors) {
+                const element = document.querySelector(selector);
+                if (element) {
+                    const rect = element.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                        return { found: true, selector };
+                    }
+                }
+            }
+            return { found: false };
+        });
+
+        if (sendButton.found) {
+            await page.click(sendButton.selector);
+            console.log('📤 Botão de enviar clicado.');
+            await randomDelay(3000, 5000);
+            
+            const sentCheck2 = await checkIfMessageSent(page);
+            if (sentCheck2) {
+                return true;
+            }
+        }
+
+        // TENTATIVA 3: Ctrl+Enter
+        console.log('🔄 Tentando Ctrl+Enter...');
+        const textField2 = await findTextField(page);
+        if (textField2) {
+            await textField2.click();
+            await randomDelay(500, 1000);
+            
+            await page.keyboard.down('Control');
+            await page.keyboard.press('Enter');
+            await page.keyboard.up('Control');
+            await randomDelay(3000, 5000);
+            
+            const sentCheck3 = await checkIfMessageSent(page);
+            if (sentCheck3) {
+                return true;
+            }
+        }
+
+        console.log('❌ Não foi possível enviar o vídeo processado.');
+        return false;
+        
+    } catch (error) {
+        console.log(`❌ Erro ao tentar enviar vídeo processado: ${error.message}`);
+        return false;
+    }
+}
+
+// Função auxiliar para encontrar campo de texto
+async function findTextField(page) {
     const selectors = [
         'textarea[placeholder*="mensagem"]',
         'textarea[placeholder*="message"]', 
@@ -558,55 +710,58 @@ async function sendVideo(page) {
         'input[type="text"]'
     ];
 
-    // Encontrar o campo de texto
     for (const selector of selectors) {
         try {
             const element = await page.$(selector);
             if (element) {
-                // Verificar se o elemento está visível
                 const isVisible = await element.boundingBox();
                 if (isVisible) {
-                    textField = element;
-                    break;
+                    return element;
                 }
             }
         } catch (e) {
-            // Continuar tentando
+            continue;
         }
     }
+    return null;
+}
 
-    if (!textField) {
-        console.log('❌ Campo de texto não encontrado.');
+// Função auxiliar para verificar se mensagem foi enviada
+async function checkIfMessageSent(page) {
+    return await page.evaluate(() => {
+        // Procurar indicadores de que a mensagem foi enviada
+        const sentIndicators = [
+            '.message-sent',
+            '.message-out',
+            '[data-testid*="msg-container"]',
+            '.chat-message',
+            '.message'
+        ];
+        
+        for (const selector of sentIndicators) {
+            const elements = document.querySelectorAll(selector);
+            if (elements.length > 0) {
+                // Verificar se há uma mensagem recente (últimos 10 segundos)
+                const now = Date.now();
+                for (const element of elements) {
+                    const timestamp = element.getAttribute('data-timestamp') || 
+                                    element.querySelector('[data-timestamp]')?.getAttribute('data-timestamp');
+                    if (timestamp && (now - parseInt(timestamp)) < 10000) {
+                        return true;
+                    }
+                }
+                // Se não conseguir verificar timestamp, assume que a última mensagem é recente
+                return elements.length > 0;
+            }
+        }
         return false;
-    }
-
-    // Clicar no campo de texto
-    await textField.click();
-    await randomDelay(1000, 2000);
-    
-    // Limpar qualquer texto existente
-    await page.keyboard.down('Control');
-    await page.keyboard.press('KeyA');
-    await page.keyboard.up('Control');
-    await page.keyboard.press('Delete');
-    
-    await randomDelay(500, 1000);
-    
-    // Pressionar Enter
-    await page.keyboard.press('Enter');
-    await randomDelay(3000, 5000);
-
-    return true;
-
-} catch (error) {
-    console.log(`❌ Erro ao enviar mensagem: ${error.message}`);
-    return false;
+    });
 }
-}
-   catch (error) {
-    console.log(`❌ Erro ao enviar video: ${error.message}`);
-    return false;
-} 
+
+// Função auxiliar para delay aleatório (assumindo que já existe)
+async function randomDelay(min, max) {
+    const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+    return new Promise(resolve => setTimeout(resolve, delay));
 }
 
 // NOVA FUNÇÃO: Seguir usuário
